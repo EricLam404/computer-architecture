@@ -1,26 +1,45 @@
 .data
 # DONOTMODIFYTHISLINE
 frameBuffer: .space 0x80000 # 512 wide X 256 high pixels
-w: .word 100
+w: .word 450
 h: .word 50
-d: .word 50
-cr: .word 0x11
-cg: .word 0x11
-cb: .word 0x99
+d: .word 100
+cr: .word 0x33
+cg: .word 0x33
+cb: .word 0xFF
 # DONOTMODIFYTHISLINE
 # Your other variables go BELOW here only
 
 .text
 main:
+	lw		$t1, w			# loads width
+	andi		$t0, $t1, 1		# gets last bit
+	bne		$t0, $0, end		# jumps to end if it is not even
+	lw		$t2, h			# loads height
+	andi		$t0, $t2, 1		# gets last bit
+	bne		$t0, $0, end		# jumps to end if it is not even
+	lw		$t3, d			# loads depth
+	andi		$t0, $t3, 1		# gets last bit
+	bne		$t0, $0, end		# jumps to end if it is not even
+	
+	add		$t0, $t1, $t3		# w + d
+	addi		$t4, $0, 512		# set width
+	slt		$t0, $t4, $t0		# width < w+d
+	bne		$t0, $0, end		# w+d > width jump end
+	add		$t0, $t2, $t3		# w + d
+	addi		$t4, $0, 256		# set height
+	slt		$t0, $t4, $t0		# height < h+d
+	bne		$t0, $0, end		# h+d > height jump end
+	
     	la		$s0, frameBuffer	# load frame buffer address
     	li		$s1, 131072		# save 512 x 256 pixels (0x20000) 131072
 	li		$s2, 0x00FFFF00		# load yellow color
 
 background:
-	sw		$s2, 0($s0)		
-	addi		$s0, $s0, 4		# goes to next pixel
-	addi		$s1, $s1, -1		# decreases total pixels left by 1
-	bne		$s1, $0, background	# repeats while there are still pixels left
+    	sw       	$s2, 0($s0)
+    	addi       	$s0, $s0, 4        	# goes to next pixel
+    	addi        	$s1, $s1, -1        	# decreases total pixels left by 1
+    	bne        	$s1, $0, background    	# repeats while there are still pixels left
 
 faceColor: 
     	lw		$t0, cr			# loads the red
@@ -107,7 +126,7 @@ skipGreen:
 	li		$t5, 0xFF		# $t5 <- 0xFF
 skipBlue:
 	or		$s2, $s2, $t5		# $s2 gets blue, making $s2 0x00(r)(g)(b)
-	mult 		$t0, $t1		# Multiply w and h
+	mult 		$t0, $t2		# Multiply w and d
 	mflo 		$s1      		# Store the lower 32 bits of the result in $s1
 	addi		$t5, $0, 512		# $t5 <- 512
 	mult		$s6, $t5		# (256 - h - d) / 2 * 512
@@ -167,10 +186,31 @@ skipSideBlue:
 	addi		$t4, $0, 2		# $t4 <- 2
 	div		$t2, $t4		# d/2
 	mflo		$t4			# $t4 <- d / 2
+	slt		$t7, $t1, $t2		# if h < d
+	bne		$t7, $0, multHeight	# skips set green to 0xFF
 	mult 		$t2, $t4		# d * d/2
 	mflo 		$s1      		# Store the lower 32 bits of the result in $s1
+	j		skip
+
+multHeight:
+	addi		$t5, $t1, 1		# h + 1
+	mult		$t1, $t5		# h * h +1
+	mflo 		$s1      		# Store the lower 32 bits of the result in $s1
+	srl		$s1, $s1, 1		# h * h+1 /2	
+	sub		$t5, $t2, $t1		# depth - height
+	srl		$t5, $t5, 1		# d - h /2
+	sub		$s1, $s1, $t1		# subtract covered part
+	srl		$t7, $t2, 1		# d/2
+	beq		$t7, $t1, addNorm	# add normal
+	add		$s7, $s1, $t5
+	j		skipCovered
+skip:
 	sub		$s1, $s1, $t4		# subtract the covered part
+
+addNorm:
 	add		$s7, $s1, $0
+
+skipCovered:
 	addi		$t5, $0, 512		# $t5 <- 512
 	mult		$s6, $t5		# (256 - h - d) / 2 * 512
 	mflo		$t5			# $s1 <- (256 - h - d) / 2 * 512
@@ -181,10 +221,10 @@ skipSideBlue:
 	mult		$t5, $t4		# pixels * 4
 	mflo		$t5			# $t5 <- pixels * 4
 	add		$s0, $s0, $t5		# jumps to top left of top part
-	addi		$t6, $0, 1		# $t6 <- 0
+	addi		$t6, $0, 1		# $t6 <- 1
 
 resetSideTopWidth:
-	beq		$s1, $0, endSideTop	# jumps to top part of the cube if there are no pixels left
+	beq		$s1, $0, startSideMid	# jumps to mid part of the cube if there are no pixels left
 	addi		$t3, $0, 512		# $t3 <- 512
 	sub		$t3, $t3, $t6		# $t3 - $t6
 	mult		$t3, $t4		# $t3 * 4
@@ -202,10 +242,69 @@ sideTop:
 	addi		$t5, $t5, -1			# decreases total width left by 1
 	beq		$t5, $0, resetSideTopWidth	# goes to next row
 	bne		$s1, $0, sideTop		# repeats while there are still pixels left
+
+startSideMid:
+	slt		$t5, $t1, $t2		# $t5 <- h < d
+	bne		$t5, $0, depthBigger	# jump to bot if h < d
+	sub		$t5, $t1, $t2		# h - d
+	mult		$t5, $t2		# (h-d) * d
+	mflo		$s1			# $s1 <- total pixels
+	addi		$t5, $0, 512		# width of screen
+	sub		$t3, $t5, $t2		# $t3 <- # of pixels to skip
+	sll		$t3, $t3, 2		# $t3 * 4
 	
-endSideTop:	
+resetSideWidth:
+	beq		$s1, $0, startSideBot	# jumps to top part of the cube if there are no pixels left
+	add		$s0, $s0, $t3		# skips to next row	
+	
+sideWidth:
+	add		$t5, $0, $t2		# $t5 <- depth		
+
+sideMid:	
+    	sw		$s2, 0($s0)		
+	addi		$s0, $s0, 4		# goes to next pixel
+	addi		$s1, $s1, -1		# decreases total pixels left by 1
+	addi		$t5, $t5, -1		# decreases total width left by 1
+	beq		$t5, $0, resetSideWidth	# goes to next row
+	bne		$s1, $0, sideMid	# repeats while there are still pixels left
+	
+depthBigger:
+	slt		$t5, $t2, $t1		# $t5 <- d < h
+	bne		$t5, $0, startSideBot	# jump to bot if d < h
+	sub		$t5, $t2, $t1		# d - h
+	mult		$t5, $t1		# (d-h) * h
+	mflo		$s1			# $s1 <- total pixels
+	addi		$t5, $0, 512		# width of screen
+	sub		$t3, $t5, $t1		# $t3 <- # of pixels to skip
+	addi		$t3, $t3, -1		# jumps 1 less so it has a slant
+	sll		$t3, $t3, 2		# $t3 * 4
+	addi		$s0, $s0, 4		# jumps 1 pixel to the right
+	
+resetSideDWidth:
+	beq		$s1, $0, startSideBot	# jumps to top part of the cube if there are no pixels left
+	add		$s0, $s0, $t3		# skips to next row	
+	
+sideDWidth:
+	add		$t5, $0, $t1		# $t5 <- height		
+
+sideDMid:	
+    	sw		$s2, 0($s0)		
+	addi		$s0, $s0, 4		# goes to next pixel
+	addi		$s1, $s1, -1		# decreases total pixels left by 1
+	addi		$t5, $t5, -1		# decreases total width left by 1
+	beq		$t5, $0, resetSideDWidth	# goes to next row
+	bne		$s1, $0, sideDMid	# repeats while there are still pixels left
+	
+startSideBot:	
 	add		$s1, $s7, $t2		# loads total pixels
+	slt		$t5, $t1, $t2		# $t5 <- h < d
+	bne		$t5, $0, setHeight	# jump to bot if h < d
 	add		$t6, $0, $t2		# $t6 <- d
+	addi		$s0, $s0, 4		# moves 1 pixel to the right
+	j		resetSideBottomWidth		
+setHeight:
+	add		$t6, $0, $t1		# $t6 <- h
+	sub		$s1, $s1, $t1		# subtract height from total
 
 resetSideBottomWidth:
 	beq		$s1, $0, end		# jumps to top part of the cube if there are no pixels left
@@ -217,10 +316,10 @@ resetSideBottomWidth:
 	
 sideBottomWidth:
 	add		$t5, $0, $t6		# $t5 <- width	
-	addi		$t6, $t6, -1		# $t6 <- $t6 + 1	
+	addi		$t6, $t6, -1		# $t6 <- $t6 - 1	
 
 sideBottom:	
-    	sw		$s2, 0($s0)		
+    sw		$s2, 0($s0)		
 	addi		$s0, $s0, 4			# goes to next pixel
 	addi		$s1, $s1, -1			# decreases total pixels left by 1
 	addi		$t5, $t5, -1			# decreases total width left by 1
